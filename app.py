@@ -556,10 +556,10 @@ def generate_report(topic: str, papers: List[Paper], top_k: int, gemini_api_key:
     md = getattr(resp, "text", "")
     return md
 
-def markdown_to_pdf_bytes(markdown_text: str) -> bytes:
+def markdown_to_pdf_bytes(markdown_text: str, title: Optional[str] = None) -> bytes:
     """Convert markdown text to styled PDF with bullet list support."""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, title=(title or "Report"))
     styles = getSampleStyleSheet()
     code_style = ParagraphStyle('Code', parent=styles['Normal'], fontName='Courier', fontSize=9, leading=12, backColor='#f5f5f5')
     story = []
@@ -880,7 +880,7 @@ if st.session_state.active_chat_id:
     chat = get_chat(st.session_state.active_chat_id)  # reload
     if chat.get("report_md"):
         st.markdown("### 📄 Latest Report")
-        pdf_bytes = markdown_to_pdf_bytes(chat["report_md"])
+        pdf_bytes = markdown_to_pdf_bytes(chat["report_md"], title=chat.get("title", "Report"))
         b64_pdf = base64.b64encode(pdf_bytes).decode()
         st.download_button(
             label="Download Report (as PDF)",
@@ -903,107 +903,127 @@ if st.session_state.active_chat_id:
         # Render QA history first (so user sees past Q&A)
         if st.session_state.qa_history:
             for i, pair in enumerate(st.session_state.qa_history, 1):
-                st.markdown(f"**Q{i}:** **{pair.get('q')}**")
-                st.markdown(f"**A{i}:** {pair.get('a')}")
+                if pair.get("q") != "accept":
+                    st.markdown(f"**Q{i}:** **{pair.get('q')}**")
+                    st.markdown(f"**A{i}:** {pair.get('a')}")
+                else:
+                    st.markdown(f"***You have accepted the report and you are satisfied with the results.***")
                 st.markdown("---")
 
-        # Show text area (widget key: 'feedback_widget'), value bound to feedback_value
-        user_feedback = st.text_area(
-            "Enter feedback to refine the report, ask a question, or say 'accept' to finish.",
-            key="feedback_widget",
-            value=st.session_state.get("feedback_value", ""),
-            height=140
-        )
-        # Keep stored copy in feedback_value
-        if user_feedback != st.session_state.get("feedback_value", ""):
-            st.session_state.feedback_value = user_feedback
+        # Check if last interaction was an "accept"
+        last_qa = st.session_state.qa_history[-1] if st.session_state.qa_history else None
+        is_accepted = last_qa and "accept" in (last_qa.get('q', '').lower())
 
-        col1, col2 = st.columns(2)
-        if col1.button("Classify Intent"):
-            if not st.session_state.feedback_value.strip():
-                st.warning("Type something first.")
-            else:
-                intent = analyze_intent(st.session_state.feedback_value, GEMINI_API_KEY)
-                st.info(f"Intent detected: **{intent}**")
+        if not is_accepted:
+            if "clear_feedback" not in st.session_state:
+                st.session_state["clear_feedback"] = False
 
-        if col2.button("Process Input"):
-            if not st.session_state.feedback_value.strip():
-                st.warning("Type something first.")
-            else:
-                user_text = st.session_state.feedback_value
-                intent = analyze_intent(user_text, GEMINI_API_KEY)
-                
-                if intent == "accept":
-                    st.success("Marked as accepted. Report finalized.")
-                    # clear stored feedback and leave QA history intact
-                    st.session_state.feedback_value = ""
-                    st.rerun()
+            # If a clear has been requested on previous interaction, do it now (before widget instantiates)
+            if st.session_state.get("clear_feedback", False):
+                st.session_state["feedback_value"] = ""
+                st.session_state["clear_feedback"] = False
 
-                elif intent == "ask":
-                    # convert to precise question and get answer
-                    question = generate_question_from_input(user_text, GEMINI_API_KEY)
-                    st.info(f"Generated question: {question}")
+            # Show text area bound directly to session_state.feedback_value (fixes stale widget issue)
+            user_feedback = st.text_area(
+                "Enter feedback to refine the report, ask a question, or say 'accept' to finish.",
+                key="feedback_value",
+                height=140
+            )
 
-                    # Show a placeholder for the answer and display a loader below the question while Gemini answers
-                    # First, show the question as a permanent element
-                    st.markdown("**Question:**")
-                    st.markdown(f"> {question}")
+            col1, col2 = st.columns(2)
+            if col1.button("Classify Intent"):
+                if not st.session_state.feedback_value.strip():
+                    st.warning("Type something first.")
+                else:
+                    intent = analyze_intent(st.session_state.feedback_value, GEMINI_API_KEY)
+                    st.info(f"Intent detected: **{intent}**")
 
-                    # Then show a spinner (loader) below it while fetching the answer
-                    answer_placeholder = st.empty()
-                    with st.spinner("Generating answer..."):
-                        papers_objs = [Paper(**p) for p in (chat.get("papers") or [])]
-                        answer = answer_question(question, chat.get("report_md", ""), papers_objs, chat.get("meta", {}).get("top_k", 10), GEMINI_API_KEY)
-                        # populate the placeholder with the answer once ready
-                        answer_placeholder.markdown("**Answer:**\n\n" + answer)
+            if col2.button("Process Input"):
+                if not st.session_state.feedback_value.strip():
+                    st.warning("Type something first.")
+                else:
+                    user_text = st.session_state.feedback_value
+                    intent = analyze_intent(user_text, GEMINI_API_KEY)
+                    
+                    if intent == "accept":
+                        # Record acceptance in QA history (both session and DB) and clear widget
+                        acceptance_q = "accept"
+                        acceptance_a = "User accepted the report and is satisfied with the results."
+                        st.session_state.qa_history.append({"q": acceptance_q, "a": acceptance_a})
+                        try:
+                            append_chat_qa(chat["_id"], acceptance_q, acceptance_a)
+                        except Exception:
+                            pass
+                        st.success("Marked as accepted. Report finalized.")
+                        # clear stored feedback and rerun to update UI (feedback widget will be hidden because of is_accepted)
+                        st.session_state["clear_feedback"] = True
+                        st.rerun()
 
-                    # append to QA history in session_state
-                    st.session_state.qa_history.append({"q": question, "a": answer})
-                    # persist to DB
-                    try:
-                        append_chat_qa(chat["_id"], question, answer)
-                    except Exception as e:
-                        st.error(f"Failed to persist QA to DB: {e}")
+                    elif intent == "ask":
+                        # convert to precise question and get answer
+                        question = generate_question_from_input(user_text, GEMINI_API_KEY)
+                        st.info(f"Generated question: {question}")
 
-                    # clear stored feedback and rerun to clear the widget while keeping QA history visible
-                    st.session_state.feedback_value = ""
-                    st.rerun()
+                        # Show a placeholder for the answer and display a loader below the question while Gemini answers
+                        # First, show the question as a permanent element
+                        st.markdown("**Question:**")
+                        st.markdown(f"> {question}")
 
-                elif intent == "refine":
-                    refinement_prompt = generate_query_from_input(user_text, GEMINI_API_KEY)
-                    st.info(f"Refining results with: '{refinement_prompt}' ...")
-                    api_keys = {"SEMANTIC_SCHOLAR_KEY": SEMANTIC_SCHOLAR_KEY, "SERPAPI_KEY": SERPAPI_KEY, "IEEE_KEY": IEEE_API_KEY}
+                        # Then show a spinner (loader) below it while fetching the answer
+                        answer_placeholder = st.empty()
+                        with st.spinner("Generating answer..."):
+                            papers_objs = [Paper(**p) for p in (chat.get("papers") or [])]
+                            answer = answer_question(question, chat.get("report_md", ""), papers_objs, chat.get("meta", {}).get("top_k", 10), GEMINI_API_KEY)
+                            # populate the placeholder with the answer once ready
+                            answer_placeholder.markdown("**Answer:**\n\n" + answer)
 
-                    # Fetch new papers based on refinement prompt
-                    with st.spinner("Fetching additional papers for refinement..."):
-                        new_papers = fetch_papers(refinement_prompt, max(10, int(chat.get("meta", {}).get("max_papers", 80) // 2)), api_keys)
-                        if not new_papers:
-                            st.error("No new papers found for refinement query.")
-                            st.stop()
-                        
-                    existing_papers = [Paper(**p) for p in (chat.get("papers") or [])]
-                    new_papers = exclude_papers(new_papers, existing_papers[:int(chat.get("meta", {}).get("top_k", 25))])
-                    merged = dedup_papers(existing_papers + new_papers)
-                        
-                    weights = (chat.get("meta", {}).get("w_rel", 0.4), chat.get("meta", {}).get("w_cit", 0.25), chat.get("meta", {}).get("w_rec", 0.35))
-                    st.info("Re-ranking the papers based on refinement prompt...")
-                    reranked = score_and_rank(merged, refinement_prompt, weights, GEMINI_API_KEY)
-                    reranked_serialized = [p.to_row() for p in reranked]
+                        # append to QA history in session_state
+                        st.session_state.qa_history.append({"q": question, "a": answer})
+                        # persist to DB
+                        try:
+                            append_chat_qa(chat["_id"], question, answer)
+                        except Exception as e:
+                            st.error(f"Failed to persist QA to DB: {e}")
 
-                    # Persist reranked results
-                    update_chat_ranked_papers(chat["_id"], reranked_serialized, meta={"last_topic": refinement_prompt})
-                    st.session_state.ranked_papers = reranked_serialized
-                    st.session_state.last_fetch_topic = refinement_prompt
+                        # clear stored feedback and rerun to clear the widget while keeping QA history visible
+                        st.session_state["clear_feedback"] = True
+                        st.rerun()
 
-                    # Log in QA history that refinement occurred
-                    refine_note = f"🧠 Paper Refinement applied: **{refinement_prompt}**"
-                    st.session_state.qa_history.append({"q": refine_note, "a": "Ranking updated, which you can check from the updated table at the top. Also, you can now generate the new report if you want from the button below the table."})
-                    append_chat_qa(chat["_id"], refine_note, "Ranking updated, which you can check from the updated table at the top. Also, you can now generate the new report if you want from the button below the table.")
+                    elif intent == "refine":
+                        refinement_prompt = generate_query_from_input(user_text, GEMINI_API_KEY)
+                        st.info(f"Refining results with: '{refinement_prompt}' ...")
+                        api_keys = {"SEMANTIC_SCHOLAR_KEY": SEMANTIC_SCHOLAR_KEY, "SERPAPI_KEY": SERPAPI_KEY, "IEEE_KEY": IEEE_API_KEY}
 
-                    st.success("Refinement complete. Review the new ranked table below, then click 'Generate Updated Report' when ready.")
+                        # Fetch new papers based on refinement prompt
+                        with st.spinner("Fetching additional papers for refinement..."):
+                            new_papers = fetch_papers(refinement_prompt, max(10, int(chat.get("meta", {}).get("max_papers", 80) // 2)), api_keys)
+                            if not new_papers:
+                                st.error("No new papers found for refinement query.")
+                                st.stop()
+                            
+                        existing_papers = [Paper(**p) for p in (chat.get("papers") or [])]
+                        new_papers = exclude_papers(new_papers, existing_papers[:int(chat.get("meta", {}).get("top_k", 25))])
+                        merged = dedup_papers(existing_papers + new_papers)
+                            
+                        weights = (chat.get("meta", {}).get("w_rel", 0.4), chat.get("meta", {}).get("w_cit", 0.25), chat.get("meta", {}).get("w_rec", 0.35))
+                        st.info("Re-ranking the papers based on refinement prompt...")
+                        reranked = score_and_rank(merged, refinement_prompt, weights, GEMINI_API_KEY)
+                        reranked_serialized = [p.to_row() for p in reranked]
 
-                    st.session_state.feedback_value = ""
-                    st.rerun()
+                        # Persist reranked results
+                        update_chat_ranked_papers(chat["_id"], reranked_serialized, meta={"last_topic": refinement_prompt})
+                        st.session_state.ranked_papers = reranked_serialized
+                        st.session_state.last_fetch_topic = refinement_prompt
+
+                        # Log in QA history that refinement occurred
+                        refine_note = f"🧠 Paper Refinement applied: **{refinement_prompt}**"
+                        st.session_state.qa_history.append({"q": refine_note, "a": "Ranking updated, which you can check from the updated table at the top. Also, you can now generate the new report if you want from the button below the table."})
+                        append_chat_qa(chat["_id"], refine_note, "Ranking updated, which you can check from the updated table at the top. Also, you can now generate the new report if you want from the button below the table.")
+
+                        st.success("Refinement complete. You can check the updated ranked papers table at the top, in a while; and can also generate a new report based on the refined ranking.")
+
+                        st.session_state["clear_feedback"] = True
+                        st.rerun()
 
     else:
         st.info("No report generated yet for this research chat. Please run the research pipeline above.")
