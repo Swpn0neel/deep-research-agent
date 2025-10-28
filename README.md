@@ -1,4 +1,4 @@
-# Deep Research Agent — README
+# Deep Research Agent
 
 > A Streamlit UI that integrates a Gemini-powered deep-research pipeline with MongoDB user authentication and chat storage. Includes paper fetching (Semantic Scholar, arXiv, Crossref, SerpAPI, IEEE), embedding & ranking, report generation with Gemini, refinement loop (refine / ask / accept), and download/save functionality.
 

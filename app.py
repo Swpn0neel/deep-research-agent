@@ -529,21 +529,57 @@ def build_context_chunks(papers: List[Paper], top_k: int) -> Tuple[str, str]:
 def generate_report(topic: str, papers: List[Paper], top_k: int, gemini_api_key: str, model_name: str = "gemini-2.5-flash") -> str:
     genai.configure(api_key=gemini_api_key)
     model = genai.GenerativeModel(model_name)
+
+    # Build context + bibliography used by the model (unchanged)
     context_str, bibliography_str = build_context_chunks(papers, top_k)
 
     sys_prompt = textwrap.dedent(f"""
     You are an expert research analyst. Given a topic and a set of top-ranked papers (with abstracts), write a THOROUGH, DETAILED, and COMPREHENSIVE research report with the following structure:
-    1) Executive Summary (300-500 words)
-    2) In-Depth Background & Core Concepts (400-600 words)
-    3) Comparative Literature Synthesis (600-900 words)
-    4) Critical Gap Analysis (300-500 words)
-    5) Future Research Directions (300-500 words)
-    6) Risks, Ethics, and Limitations (200-400 words)
-    7) Practical Applications and Tooling Landscape (200-400 words)
-    8) Conclusion (150-300 words)
 
-    Use inline numeric citations like [1], [2] that map to the provided bibliography.
-    """)
+    1) Executive Summary (300-500 words)
+       - Provide a broad, insightful overview of the field, highlighting the most significant findings, trends, and challenges.
+       - Summarize the main contributions of the top papers, referencing them with [#] citations.
+
+    2) In-Depth Background & Core Concepts (400-600 words)
+       - Explain all relevant background, terminology, and foundational concepts in detail.
+       - Include historical context, key definitions, and major theoretical frameworks.
+       - Use clear, accessible language for non-experts.
+
+    3) Comparative Literature Synthesis (600-900 words)
+       - Analyze and compare the top papers in depth, discussing methodologies, datasets, benchmarks, and results.
+       - Identify major research clusters, approaches, and their evolution over time.
+       - Highlight consensus, controversies, and open debates, citing papers as [#].
+
+    4) Critical Gap Analysis (300-500 words)
+       - Identify and discuss methodological, data, evaluation, reproducibility, and scalability gaps in the literature.
+       - Point out under-explored areas, limitations, and weaknesses, with specific paper references.
+
+    5) Future Research Directions (300-500 words)
+       - Propose prioritized, concrete, and measurable future research directions.
+       - Suggest new methodologies, datasets, or evaluation strategies.
+       - Discuss potential for interdisciplinary work and emerging trends.
+
+    6) Risks, Ethics, and Limitations (200-400 words)
+       - Analyze ethical, societal, and practical risks associated with the research area.
+       - Discuss limitations of current approaches and possible negative impacts.
+
+    7) Practical Applications and Tooling Landscape (200-400 words)
+       - Survey real-world applications, tools, and systems based on the reviewed research.
+       - Highlight industry adoption, open-source projects, and commercial products.
+
+    8) Conclusion (150-300 words)
+       - Synthesize the main insights, reiterate the importance of the topic, and summarize key takeaways.
+
+    Rules:
+    - Use clear section headings and subheadings.
+    - Use inline numeric citations like [1], [2] that map to the provided bibliography.
+    - If evidence is weak or missing, explicitly state so.
+    - Be precise, avoid hand-waving, and support all claims with references.
+    - Aim for a total length of 3000-5000 words, unless context is sparse.
+    - Ensure the report is self-contained and highly informative for both experts and newcomers.
+    """
+    )
+
     user_prompt = f"Topic: {topic}\n\nTop Papers Context (ranked):\n" + context_str + "\n\nBibliography (use these citation indices):\n" + bibliography_str
 
     resp = model.generate_content(
@@ -551,10 +587,40 @@ def generate_report(topic: str, papers: List[Paper], top_k: int, gemini_api_key:
             {"role": "user", "parts": [{"text": sys_prompt + "\n\n" + user_prompt}]},
         ],
         safety_settings=None,
-        generation_config={"temperature": 0.6, "top_p": 0.9}
+        generation_config={
+            "temperature": 0.6,
+            "top_p": 0.9,
+        }
     )
-    md = getattr(resp, "text", "")
-    return md
+    try:
+        md = resp.text
+    except Exception as e:
+        raise APIError(f"Gemini generation failed: {e}")
+
+    refs_lines = []
+    for i, p in enumerate(papers[:top_k], 1):
+        title = (p.title or "Untitled").strip()
+        # Prefer a valid URL (paper url, pdf_url), fallback to DOI resolver if DOI available
+        url = p.url or p.pdf_url or (f"https://doi.org/{p.doi}" if p.doi else None)
+        if url:
+            title_md = f"[{title}]({url})"
+        else:
+            title_md = title
+        year = str(p.year) if p.year else "n.d."
+        # Add a shorter summary line for references
+        line = f"{i}. {title_md} — ({year})"
+        # if there's an explicit url that's not the doi link, append 'Link:'
+        if p.url or p.pdf_url:
+            link = p.url or p.pdf_url
+            line += f"\n**Link**: {link}"
+        refs_lines.append(line)
+
+    references_md = "## References\n\n" + "\n\n".join(refs_lines) + "\n"
+
+    # Ensure there is a separation before appending references
+    final_md = md.rstrip() + "\n\n" + references_md
+
+    return final_md
 
 def markdown_to_pdf_bytes(markdown_text: str, title: Optional[str] = None) -> bytes:
     """Convert markdown text to styled PDF with bullet list support."""
