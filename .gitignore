@@ -1,1 +1,10 @@
 .env
+__pycache__/
+./__pycache__
+agent-plans
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
