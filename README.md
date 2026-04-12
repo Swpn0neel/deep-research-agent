@@ -1,129 +1,166 @@
-# Deep Research Agent
+# 🔬 Scholarian: Deep Research Agent
 
-> A Streamlit UI that integrates a Gemini-powered deep-research pipeline with MongoDB user authentication and chat storage. Includes paper fetching (Semantic Scholar, arXiv, Crossref, SerpAPI, IEEE), embedding & ranking, report generation with Gemini, refinement loop (refine / ask / accept), and download/save functionality.
+> **Empowering academic research with Gemini-driven intelligence.**
 
----
-
-## Contents
-
-- `app.py` — Main Streamlit application (integrates UI, auth, research pipeline).
-- `.env` — Environment variables (not included; create this locally).
-- `requirements.txt` — Python dependencies (included below and as a downloadable file).
-- `README_and_requirements.md` — This document.
+Scholarian is a sophisticated, AI-powered research assistant designed to streamline the academic literature review process. By integrating multiple paper sources with Google's Gemini models, it automates the discovery, ranking, and synthesis of scholarly articles into comprehensive research reports.
 
 ---
 
-## Quick overview
+## ✨ Features
 
-1. Users sign up / sign in (stored in MongoDB).
-2. Each user can create normal chats or _Research Chats_.
-3. For a Research Chat, the user provides a topic (and optional parameters) and runs the pipeline:
-
-   - Fetch papers from configured sources (Semantic Scholar, arXiv, Crossref, SerpAPI, IEEE when API keys provided).
-   - Deduplicate, embed, score and rank papers.
-   - Generate a comprehensive research report using Gemini (configurable model).
-   - Save report and ranked papers to MongoDB and offer downloads (MD / CSV / JSON).
-
-4. After generation, users can refine the report (the app classifies input into `refine`, `ask`, or `accept`), which will fetch more papers and regenerate the report or answer a question from the current report.
+- **Multi-Source Retrieval**: Fetches papers from Semantic Scholar, arXiv, Crossref, SerpAPI, and IEEE Xplore.
+- **AI-Powered Query Enrichment**: Uses Gemini to expand a simple topic into a nuanced research query for better coverage.
+- **Intelligent Scoring & Ranking**: Employs Gemini embeddings and metadata-based weights (Relevance, Citations, Recency) to rank papers.
+- **Automated Report Generation**: Synthesizes top-ranked papers into a structured Markdown research report.
+- **Interactive Refinement Loop**: Classify user feedback to refine reports, answer specific questions, or accept the final version.
+- **Persistent Chat Storage**: Secure user authentication and chat history powered by MongoDB.
+- **Export Capabilities**: Download reports as PDF, CSV, or JSON for further use.
 
 ---
 
-## Environment variables (`.env`)
+## 🛠 Architecture
 
-Create a `.env` file at the project root with the following variables:
+The project follows a modular structure, separating the UI layer from the core research logic.
+
+```mermaid
+graph TD
+    User([User]) <--> UI[Streamlit UI]
+    UI <--> DB[(MongoDB)]
+    UI <--> Pipeline[Research Pipeline]
+    
+    subgraph "Core Pipeline"
+        Pipeline --> Enrich[Query Enrichment]
+        Enrich --> Fetch[Paper Fetcher]
+        Fetch --> Rank[Scoring & Ranking]
+        Rank --> Gen[Report Generation]
+    end
+    
+    subgraph "External Integrations"
+        Enrich <--> Gemini[Gemini API]
+        Fetch <--> arXiv[arXiv API]
+        Fetch <--> SemSchol[Semantic Scholar]
+        Fetch <--> IEEE[IEEE Xplore]
+        Fetch <--> Serp[SerpAPI / Crossref]
+        Rank <--> Gemini
+        Gen <--> Gemini
+    end
+```
+
+### Project Structure
+
+- **`app.py`**: The main entry point; handles the Streamlit UI and user session management.
+- **`src/`**: Core logic directory.
+  - **`pipeline.py`**: Orchestrates the high-level research flow.
+  - **`ai.py`**: Interfaces with Gemini for LLM and Embedding tasks.
+  - **`clients.py`**: API clients for various paper sources.
+  - **`database.py`**: MongoDB interaction layer.
+  - **`config.py`**: Application configuration and environment variable loading.
+  - **`utils.py`**: Helper functions (e.g., Markdown-to-PDF conversion).
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Python 3.9+**
+- **MongoDB Instance** (Local or Atlas)
+- **API Keys**:
+  - [Google Gemini API Key](https://aistudio.google.com/) (Required)
+  - [Semantic Scholar Key](https://www.semanticscholar.org/product/api) (Recommended)
+  - [SerpAPI Key](https://serpapi.com/) (Optional)
+  - [IEEE Xplore API Key](https://developer.ieee.org/) (Optional)
+
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/Swpn0neel/deep-research-agent.git
+   cd deep-research-agent
+   ```
+
+2. **Set up a virtual environment**:
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Configuration
+
+Create a `.env` file in the project root with the following variables:
 
 ```env
-MONGO_URI="your_mongo_connection_string"
-MONGO_DBNAME="chat_app"  # optional, default used if omitted
-GEMINI_API_KEY="your_gemini_api_key"
-SEMANTIC_SCHOLAR_KEY="optional_semantic_scholar_api_key"
-IEEE_API_KEY="optional_ieee_api_key"
-SERPAPI_KEY="optional_serpapi_key"
+# Database
+MONGO_URI="your_mongodb_connection_string"
+MONGO_DBNAME="scholarian_db"
+
+# Gemini AI (Minimum 1 recommended, supports rotation/backup)
+GEMINI_API_KEY1="your_primary_gemini_key"
+GEMINI_API_KEY2="your_secondary_gemini_key_optional"
+
+# Research Providers
+SEMANTIC_SCHOLAR_KEY="your_key"
+SERPAPI_KEY="your_key"
+IEEE_API_KEY="your_key"
 ```
 
-**Notes:**
+---
 
-- `MONGO_URI` typically looks like `mongodb+srv://user:pass@cluster0.xyz.mongodb.net/?retryWrites=true&w=majority` when using Atlas.
-- Do **not** commit `.env` or API keys to source control.
+## 📊 The Research Pipeline
+
+### 1. Query Enrichment
+The system doesn't just search for your raw topic. It uses Gemini to analyze the topic and generate an "enriched" query that includes technical keywords, synonyms, and sub-domains to maximize retrieval quality.
+
+### 2. Paper Fetching
+Concurrent requests are sent to multiple repositories. The results are dedupe-checked and normalized into a standard `Paper` model.
+
+### 3. Scoring & Ranking
+Papers are evaluated based on a composite score:
+- **Relevance**: Cosine similarity between Gemini embeddings of the paper abstract and the enriched query.
+- **Impact**: Normalized citation counts.
+- **Recency**: Time-weighted decay based on the publication year.
+> You can adjust the weights for these factors directly in the UI settings.
+
+### 4. Synthesis
+The top *K* papers are provided as context to Gemini, which generates a structured report covering background, methodology, current trends, and future directions.
 
 ---
 
-## Installation
+## 💾 Data Management
 
-1. Create and activate a Python virtual environment (recommended):
-
-```bash
-python -m venv venv
-source venv/bin/activate  # macOS / Linux
-venv\Scripts\activate    # Windows
-```
-
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Create your `.env` file as shown above.
-
-4. Run the app:
-
-```bash
-streamlit run app.py
-```
-
-Open the URL printed by Streamlit (usually [http://localhost:8501](http://localhost:8501)).
+- **Users**: Passwords are hashed using `bcrypt` before storage.
+- **Chats**: Every research session is a "chat" document containing metadata, fetched paper logs, and the generated report.
+- **Persistence**: Reports are strictly tied to the chat ID in MongoDB, ensuring you never lose your progress.
 
 ---
 
-## Recommended workflow
 
-1. Sign up and sign in.
-2. Create a **New Research Chat** from the sidebar.
-3. Provide a concise research Topic and optionally adjust settings in the `Research Settings` expander (max papers, top-K, weights, embedding/generation models).
-4. Click **Run Research / Generate Report** and wait.
-5. After generation, preview the report, download files, and use the `Refinement & Q&A` box for follow-ups.
+## 🤝 Contributing
 
----
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-## File storage and downloads
-
-- Generated report and paper metadata are stored inside the `chats` collection in MongoDB (fields: `report_md`, `papers`, and `meta`).
-- For convenience, the app also writes temporary files named `report_<chatid>.md|.csv|.json` on the server and exposes them via `st.download_button` so the user can download them through the browser.
-- If you host the app on a server, downloaded files are served through the Streamlit session (the files still exist on the server filesystem). Consider switching to GridFS or S3 if you want centralized artifact storage.
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ---
 
-## Notes about Gemini usage & costs
+## ⚖️ License
 
-- The app uses Gemini both for embeddings and text generation. Both can incur API usage costs depending on your account and the models used.
-- Embeddings are called for each paper during ranking; with many papers this can become slow and expensive.
-- Consider using fewer `max_papers` for testing and gradually scale when you are satisfied.
+Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
-## Troubleshooting
-
-- `MONGO_URI` / connectivity errors: ensure your cluster allows connections from your IP and the connection string is correct.
-- Gemini API problems: verify `GEMINI_API_KEY` and that the specified model name is available to your account.
-- Missing optional API keys: the app will skip sources that are not configured (it will still run with arXiv / Crossref etc.).
-- If feeds fail for arXiv, ensure `feedparser` is installed and that your environment allows outbound HTTP requests.
-
----
-
-## Extending or customizing
-
-- **Background jobs**: the app runs heavy tasks synchronously. If you need asynchronous/background generation, add a job queue (Redis + RQ / Celery) and expose job status via the UI.
-- **Storage**: switch temporary file storage to GridFS or S3 for persistent file management.
-- **Streaming**: implement streaming of the report generation if you want to show partial content as Gemini produces it.
-- **Access control**: add roles (admin/team) or shareable team chats by augmenting the `chats` collection with `team_id` and ACL checks.
-
----
-
-## Contributing
-
-1. Fork the repo
-2. Create a feature branch
-3. Open a PR with a clear description of the change
-
----
+<p align="center">
+  Developed with ❤️ by <a href="https://github.com/Swpn0neel">Swapnoneel</a>
+</p>
